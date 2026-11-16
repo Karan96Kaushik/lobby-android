@@ -177,6 +177,7 @@ class HlsDownloadManager(private val context: Context) {
     fun pause(item: DownloadItem) {
         paused.add(item.id)
         downloaders[item.id]?.cancel()
+        jobs[item.id]?.cancel()
         update(item.id) { it.copy(state = DownloadState.PAUSED) }
     }
 
@@ -314,7 +315,8 @@ class HlsDownloadManager(private val context: Context) {
                 postBanner(mapped.second)
             } finally {
                 downloaders.remove(item.id)
-                jobs.remove(item.id)
+                val current = coroutineContext[kotlinx.coroutines.Job]
+                if (current != null && jobs[item.id] == current) jobs.remove(item.id)
                 refreshService()
             }
         }

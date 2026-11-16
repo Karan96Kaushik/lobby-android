@@ -267,7 +267,7 @@ fun DownloadsSheet(
     onRetryFromPage: () -> Unit
 ) {
     LaunchedEffect(Unit) { downloads.verifyFilesOnDisk() }
-    val completed = downloads.items.count { it.state == DownloadState.COMPLETED && downloads.hasMedia(it.id) }
+    val completed = downloads.items.count { it.state == DownloadState.COMPLETED }
     Column(
         Modifier
             .fillMaxWidth()
