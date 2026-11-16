@@ -42,32 +42,37 @@ class DownloadStore(context: Context) {
         .put("title", item.title)
         .put("sourceId", item.sourceId)
         .put("originalUrl", item.originalUrl)
-        .put("pageUrl", item.pageUrl)
-        .put("mediaUrl", item.mediaUrl)
-        .put("pageOrigin", item.pageOrigin)
+        .put("pageUrl", item.pageUrl ?: JSONObject.NULL)
+        .put("mediaUrl", item.mediaUrl ?: JSONObject.NULL)
+        .put("pageOrigin", item.pageOrigin ?: JSONObject.NULL)
         .put("userAgent", item.userAgent)
         .put("state", item.state.name)
         .put("progress", item.progress)
         .put("bytes", item.bytes)
         .put("createdAt", item.createdAt)
-        .put("errorMessage", item.errorMessage)
-        .put("failureKind", item.failureKind?.name)
+        .put("errorMessage", item.errorMessage ?: JSONObject.NULL)
+        .put("failureKind", item.failureKind?.name ?: JSONObject.NULL)
+
+    private fun optional(json: JSONObject, key: String): String? {
+        if (!json.has(key) || json.isNull(key)) return null
+        return json.optString(key).ifEmpty { null }
+    }
 
     private fun fromJson(json: JSONObject): DownloadItem = DownloadItem(
         id = json.getString("id"),
         title = json.optString("title"),
         sourceId = json.optString("sourceId"),
         originalUrl = json.optString("originalUrl"),
-        pageUrl = json.optString("pageUrl").ifEmpty { null },
-        mediaUrl = json.optString("mediaUrl").ifEmpty { null },
-        pageOrigin = json.optString("pageOrigin").ifEmpty { null },
+        pageUrl = optional(json, "pageUrl"),
+        mediaUrl = optional(json, "mediaUrl"),
+        pageOrigin = optional(json, "pageOrigin"),
         userAgent = json.optString("userAgent"),
         state = runCatching { DownloadState.valueOf(json.getString("state")) }.getOrDefault(DownloadState.FAILED),
         progress = json.optDouble("progress", 0.0),
         bytes = json.optLong("bytes"),
         createdAt = json.optLong("createdAt"),
-        errorMessage = json.optString("errorMessage").ifEmpty { null },
-        failureKind = json.optString("failureKind").ifEmpty { null }?.let {
+        errorMessage = optional(json, "errorMessage"),
+        failureKind = optional(json, "failureKind")?.let {
             runCatching { DownloadFailureKind.valueOf(it) }.getOrNull()
         }
     )

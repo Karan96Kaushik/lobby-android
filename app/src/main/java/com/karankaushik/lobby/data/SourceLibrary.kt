@@ -115,7 +115,7 @@ class SourceLibrary(private val prefs: SharedPreferences) {
                     )
                     if (source.home.isNotBlank() &&
                         source.allowedHosts.isNotEmpty() &&
-                        source.allowedHosts.all(::isAcceptableHost)
+                        source.allowedHosts.all { isAcceptableHost(it) }
                     ) {
                         add(source)
                     }

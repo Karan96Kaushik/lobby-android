@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -292,7 +293,10 @@ fun DownloadsSheet(
             Text(formatBytes(downloads.totalStorageBytes), color = Color.White, fontWeight = FontWeight.Bold)
         }
         Text("Max quality", color = Color.White.copy(alpha = 0.6f), modifier = Modifier.padding(top = 12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 8.dp)
+        ) {
             DownloadQuality.entries.forEach { quality ->
                 FilterChip(
                     selected = downloads.preferredQuality == quality,

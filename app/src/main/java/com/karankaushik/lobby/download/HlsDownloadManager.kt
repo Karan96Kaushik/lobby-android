@@ -226,8 +226,14 @@ class HlsDownloadManager(private val context: Context) {
                 }
             }
         }
-        if (reconciled != items) {
-            items = reconciled
+        val updates = reconciled.associateBy { it.id }
+        val merged = items.map { current ->
+            val prior = snapshot.firstOrNull { it.id == current.id }
+            val updated = updates[current.id]
+            if (prior != null && updated != null && current == prior) updated else current
+        }
+        if (merged != items) {
+            items = merged
             persist()
         }
     }
