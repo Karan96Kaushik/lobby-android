@@ -205,6 +205,7 @@ class HlsDownloadManager(private val context: Context) {
         val snapshot = items
         val reconciled = withContext(Dispatchers.IO) {
             snapshot.map { item ->
+                if (jobs[item.id]?.isActive == true) return@map item
                 when (item.state) {
                     DownloadState.DOWNLOADING, DownloadState.QUEUED -> item.copy(
                         state = DownloadState.FAILED,
@@ -267,6 +268,7 @@ class HlsDownloadManager(private val context: Context) {
         if (jobs[item.id]?.isActive == true) return
         update(item.id) { it.copy(state = DownloadState.QUEUED, errorMessage = null, failureKind = null) }
         val job = scope.launch {
+            jobs[item.id] = coroutineContext[kotlinx.coroutines.Job] ?: return@launch
             try {
                 val ready = withContext(Dispatchers.IO) { prepare(item) }
                 if (removed.contains(item.id) || paused.contains(item.id)) return@launch
