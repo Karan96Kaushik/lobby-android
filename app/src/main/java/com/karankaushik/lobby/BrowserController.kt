@@ -15,6 +15,7 @@ import com.karankaushik.lobby.model.HlsCandidate
 import com.karankaushik.lobby.model.MediaSource
 import com.karankaushik.lobby.model.PlaylistRole
 import com.karankaushik.lobby.policy.SitePolicy
+import com.karankaushik.lobby.remote.RemoteUrl
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -68,6 +69,7 @@ class BrowserController(app: Application) : AndroidViewModel(app) {
         private set
     var userAgent: String = ""
 
+    private var remoteHosts by mutableStateOf<List<String>>(emptyList())
     private var loaded = false
     private var noticeGeneration = 0
     private var refreshState: (() -> Unit)? = null
@@ -122,8 +124,39 @@ class BrowserController(app: Application) : AndroidViewModel(app) {
         emit(BrowserCommand.Load(selectedSource.home))
     }
 
+    fun navigationHosts(): List<String> {
+        if (remoteHosts.isEmpty()) return selectedSource.allowedHosts
+        return selectedSource.allowedHosts + remoteHosts
+    }
+
+    fun openRemoteUrl(raw: String): String? {
+        val url = RemoteUrl.normalize(raw) ?: return "Enter a web address."
+        val host = runCatching { java.net.URI(url).host }.getOrNull() ?: return "Enter a web address."
+        val match = sources.firstOrNull { SitePolicy.isFirstPartyHost(host, it.allowedHosts) }
+        hlsCandidate = null
+        errorMessage = null
+        if (match != null) {
+            remoteHosts = emptyList()
+            if (match.id != selectedSource.id) {
+                persistSession()
+                selectedSource = match
+                displayedSourceId = match.id
+                library.saveSelectedId(match.id)
+                pageTitle = sessions.savedTitle(match.id) ?: match.name
+            }
+        } else {
+            remoteHosts = listOf(SourceLibrary.canonicalHost(host))
+        }
+        pageUrl = url
+        publish()
+        emit(BrowserCommand.Load(url))
+        return null
+    }
+
     fun open(source: MediaSource) {
-        if (source.id == selectedSource.id && loaded) return
+        val hadRemote = remoteHosts.isNotEmpty()
+        remoteHosts = emptyList()
+        if (source.id == selectedSource.id && loaded && !hadRemote) return
         persistSession()
         hlsCandidate = null
         selectedSource = source
@@ -350,7 +383,7 @@ class BrowserController(app: Application) : AndroidViewModel(app) {
     }
 
     private fun updateTitle(title: String, url: String?) {
-        if (url != null && !SitePolicy.isFirstPartyPage(url, selectedSource.allowedHosts)) return
+        if (url != null && !SitePolicy.isFirstPartyPage(url, navigationHosts())) return
         pageTitle = title.trim().ifEmpty { selectedSource.name }
         if (hlsCandidate != null && title.isNotBlank()) {
             hlsCandidate = hlsCandidate?.copy(pageTitle = title.trim())
@@ -358,9 +391,11 @@ class BrowserController(app: Application) : AndroidViewModel(app) {
     }
 
     private fun rememberLocation(url: String) {
+        val http = url.startsWith("https://") || url.startsWith("http://")
+        if (!http) return
+        pageUrl = url
         val source = sources.firstOrNull { it.id == displayedSourceId } ?: return
         if (!SitePolicy.isKeepable(url, source.allowedHosts)) return
-        pageUrl = url
         sessions.save(source.id, url, pageTitle, source.allowedHosts)
     }
 

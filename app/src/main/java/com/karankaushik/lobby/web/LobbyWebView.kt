@@ -5,6 +5,8 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.graphics.Bitmap
+import android.os.SystemClock
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
@@ -26,6 +28,7 @@ import androidx.webkit.WebViewFeature
 import com.karankaushik.lobby.BrowserCommand
 import com.karankaushik.lobby.BrowserController
 import com.karankaushik.lobby.policy.SitePolicy
+import com.karankaushik.lobby.remote.RemoteCommand
 import java.io.ByteArrayInputStream
 
 class LobbyJsBridge(private val controller: BrowserController) {
@@ -89,8 +92,16 @@ fun createLobbyWebView(context: Context, controller: BrowserController): SwipeRe
     return swipe
 }
 
+fun SwipeRefreshLayout.lobbyWebView(): WebView? {
+    for (index in 0 until childCount) {
+        val child = getChildAt(index)
+        if (child is WebView) return child
+    }
+    return null
+}
+
 fun applyBrowserCommand(swipe: SwipeRefreshLayout, command: BrowserCommand, controller: BrowserController) {
-    val webView = swipe.getChildAt(0) as? WebView ?: return
+    val webView = swipe.lobbyWebView() ?: return
     when (command) {
         BrowserCommand.Back -> if (webView.canGoBack()) webView.goBack()
         BrowserCommand.Forward -> if (webView.canGoForward()) webView.goForward()
@@ -123,6 +134,43 @@ fun applyBrowserCommand(swipe: SwipeRefreshLayout, command: BrowserCommand, cont
     }
 }
 
+fun applyRemoteCommand(swipe: SwipeRefreshLayout, command: RemoteCommand, controller: BrowserController) {
+    val webView = swipe.lobbyWebView()
+    when (command) {
+        is RemoteCommand.Url -> {
+            val error = controller.openRemoteUrl(command.url)
+            if (error != null) controller.showNotice(error)
+        }
+        is RemoteCommand.Key -> when (command.name) {
+            "back" -> controller.goBack()
+            "forward" -> controller.goForward()
+            "home" -> controller.goHome()
+            "reload" -> controller.reload()
+            "stop" -> controller.stop()
+            "up" -> webView?.let { tapKey(it, KeyEvent.KEYCODE_DPAD_UP) }
+            "down" -> webView?.let { tapKey(it, KeyEvent.KEYCODE_DPAD_DOWN) }
+            "left" -> webView?.let { tapKey(it, KeyEvent.KEYCODE_DPAD_LEFT) }
+            "right" -> webView?.let { tapKey(it, KeyEvent.KEYCODE_DPAD_RIGHT) }
+            "select" -> webView?.let { tapKey(it, KeyEvent.KEYCODE_DPAD_CENTER) }
+            "pageup" -> webView?.let { tapKey(it, KeyEvent.KEYCODE_PAGE_UP) }
+            "pagedown" -> webView?.let { tapKey(it, KeyEvent.KEYCODE_PAGE_DOWN) }
+            "play" -> webView?.let { tapKey(it, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) }
+            "seekback" -> webView?.let { tapKey(it, KeyEvent.KEYCODE_MEDIA_REWIND) }
+            "seekfwd" -> webView?.let { tapKey(it, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD) }
+            "mute" -> webView?.evaluateJavascript("window.__lobbyMute && window.__lobbyMute()", null)
+        }
+    }
+}
+
+private fun tapKey(webView: WebView, keyCode: Int) {
+    webView.isFocusable = true
+    webView.isFocusableInTouchMode = true
+    if (!webView.hasFocus()) webView.requestFocus()
+    val downAt = SystemClock.uptimeMillis()
+    webView.dispatchKeyEvent(KeyEvent(downAt, downAt, KeyEvent.ACTION_DOWN, keyCode, 0))
+    webView.dispatchKeyEvent(KeyEvent(downAt, SystemClock.uptimeMillis(), KeyEvent.ACTION_UP, keyCode, 0))
+}
+
 private fun installDocumentScript(webView: WebView) {
     val script = PageScripts.source()
     if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
@@ -143,7 +191,7 @@ private class LobbyWebClient(
             return true
         }
         val mainFrame = request.isForMainFrame
-        return when (SitePolicy.decision(url, mainFrame, controller.selectedSource.allowedHosts)) {
+        return when (SitePolicy.decision(url, mainFrame, controller.navigationHosts())) {
             SitePolicy.Decision.ALLOW -> false
             SitePolicy.Decision.BLOCK_POPUP -> {
                 controller.onPopupBlocked(mainFrame)

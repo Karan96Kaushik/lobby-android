@@ -12,10 +12,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        val downloads = (application as LobbyApp).downloads
+        val app = application as LobbyApp
         setContent {
             LobbyTheme {
-                BrowserScreen(controller = viewModel(), downloads = downloads)
+                BrowserScreen(
+                    controller = viewModel(),
+                    downloads = app.downloads,
+                    remote = app.remote
+                )
             }
         }
     }

@@ -31,12 +31,15 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SettingsRemote
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -75,16 +78,21 @@ import androidx.media3.ui.PlayerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.karankaushik.lobby.BrowserController
 import com.karankaushik.lobby.download.HlsDownloadManager
+import com.karankaushik.lobby.remote.RemoteHub
+import com.karankaushik.lobby.remote.RemoteLink
 import com.karankaushik.lobby.web.applyBrowserCommand
+import com.karankaushik.lobby.web.applyRemoteCommand
 import com.karankaushik.lobby.web.createLobbyWebView
+import com.karankaushik.lobby.web.lobbyWebView
 
 private enum class LobbySheet { SOURCES, PROTECTION, DOWNLOADS }
 
 @OptIn(ExperimentalMaterial3Api::class, UnstableApi::class)
 @Composable
-fun BrowserScreen(controller: BrowserController, downloads: HlsDownloadManager) {
+fun BrowserScreen(controller: BrowserController, downloads: HlsDownloadManager, remote: RemoteHub) {
     val context = LocalContext.current
     var chromeVisible by remember { mutableStateOf(true) }
+    var showRemote by remember { mutableStateOf(false) }
     var sheet by remember { mutableStateOf<LobbySheet?>(null) }
     var playingId by remember { mutableStateOf<String?>(null) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -108,12 +116,25 @@ fun BrowserScreen(controller: BrowserController, downloads: HlsDownloadManager) 
             applyBrowserCommand(host, command, controller)
         }
     }
+    LaunchedEffect(remote) {
+        remote.incoming.collect { command ->
+            val host = webHost.value ?: return@collect
+            applyRemoteCommand(host, command, controller)
+        }
+    }
+    var announcedPeer by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(remote.hostPeer) {
+        val peer = remote.hostPeer
+        if (peer != null && peer != announcedPeer) controller.showNotice("$peer has the remote")
+        announcedPeer = peer
+    }
 
     val playing = playingId?.let { id -> downloads.items.firstOrNull { it.id == id } }
-    BackHandler(enabled = playing != null || sheet != null || controller.canGoBack) {
+    BackHandler(enabled = playing != null || sheet != null || showRemote || controller.canGoBack) {
         when {
             playing != null -> playingId = null
             sheet != null -> sheet = null
+            showRemote -> showRemote = false
             controller.canGoBack -> controller.goBack()
         }
     }
@@ -131,6 +152,8 @@ fun BrowserScreen(controller: BrowserController, downloads: HlsDownloadManager) 
                     onSources = { sheet = LobbySheet.SOURCES },
                     onProtection = { sheet = LobbySheet.PROTECTION },
                     onDownloads = { sheet = LobbySheet.DOWNLOADS },
+                    onRemote = { showRemote = true },
+                    remoteActive = remote.hosting || remote.link is RemoteLink.Connected,
                     onSave = {
                         if (Build.VERSION.SDK_INT >= 33 &&
                             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -142,18 +165,26 @@ fun BrowserScreen(controller: BrowserController, downloads: HlsDownloadManager) 
                     onHide = { chromeVisible = false }
                 )
             }
+            if (remote.hosting) {
+                TextButton(onClick = { showRemote = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        if (remote.hostPeer != null) "Controlled by ${remote.hostPeer}" else "Remote PIN ${remote.pin}",
+                        color = LobbyAccent,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),
                     factory = { viewContext ->
                         val swipe = createLobbyWebView(viewContext, controller)
-                        val webView = swipe.getChildAt(0) as WebView
-                        webView.loadUrl(controller.initialPageUrl())
+                        swipe.lobbyWebView()?.loadUrl(controller.initialPageUrl())
                         webHost.value = swipe
                         swipe
                     },
                     onRelease = { swipe ->
-                        val webView = swipe.getChildAt(0) as? WebView
+                        val webView = swipe.lobbyWebView()
                         webView?.removeJavascriptInterface("LobbyBridge")
                         webView?.destroy()
                         webHost.value = null
@@ -196,6 +227,9 @@ fun BrowserScreen(controller: BrowserController, downloads: HlsDownloadManager) 
         if (playing != null) {
             OfflinePlayer(itemId = playing.id, downloads = downloads, onClose = { playingId = null })
         }
+        if (showRemote) {
+            RemoteScreen(controller = controller, hub = remote, onClose = { showRemote = false })
+        }
     }
 
     if (sheet != null) {
@@ -229,6 +263,8 @@ private fun Toolbar(
     onSources: () -> Unit,
     onProtection: () -> Unit,
     onDownloads: () -> Unit,
+    onRemote: () -> Unit,
+    remoteActive: Boolean,
     onSave: () -> Unit,
     onHide: () -> Unit
 ) {
@@ -285,6 +321,13 @@ private fun Toolbar(
                     }
                 }
             }
+            ToolIcon(
+                Icons.Filled.SettingsRemote,
+                "Remote",
+                true,
+                onRemote,
+                if (remoteActive) LobbyAccent else Color.White
+            )
             ToolIcon(Icons.Filled.Shield, "Protection", true, onProtection, LobbyAccent)
             ToolIcon(Icons.Filled.KeyboardArrowUp, "Hide controls", true, onHide)
         }

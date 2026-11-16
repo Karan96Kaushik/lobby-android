@@ -111,6 +111,108 @@ object PageScripts {
             } catch (e) {}
           }
 
+          if (!window.__lobbyRemoteInstalled) {
+            window.__lobbyRemoteInstalled = true;
+            function findLocalVideo() {
+              var best = null;
+              var bestScore = -1;
+              function scan(root) {
+                if (!root || !root.querySelectorAll) return;
+                var vids = root.querySelectorAll("video");
+                for (var i = 0; i < vids.length; i++) {
+                  var v = vids[i];
+                  var r = v.getBoundingClientRect ? v.getBoundingClientRect() : { width: 0, height: 0 };
+                  var score = Math.max(0, r.width) * Math.max(0, r.height) + ((!v.paused && !v.ended) ? 1e9 : 0) + (v.readyState > 0 ? 1e6 : 0);
+                  if (score > bestScore) { best = v; bestScore = score; }
+                }
+                var all = root.querySelectorAll("*");
+                for (var j = 0; j < all.length; j++) {
+                  if (all[j].shadowRoot) scan(all[j].shadowRoot);
+                }
+              }
+              scan(document);
+              return best;
+            }
+            function broadcastCommand(cmd, value) {
+              var msg = { __lobbyMediaCmd: cmd, value: value };
+              var frames = document.getElementsByTagName("iframe");
+              for (var i = 0; i < frames.length; i++) {
+                try { frames[i].contentWindow.postMessage(msg, "*"); } catch (e) {}
+              }
+            }
+            function applyMediaCommand(cmd, value) {
+              var v = findLocalVideo();
+              if (v && (v.readyState > 0 || v.currentSrc || v.src)) {
+                try {
+                  if (cmd === "seek" && isFinite(v.currentTime)) {
+                    var next = v.currentTime + Number(value || 0);
+                    if (isFinite(v.duration) && v.duration > 0) {
+                      next = Math.min(Math.max(0, next), Math.max(0, v.duration - 0.25));
+                    } else {
+                      next = Math.max(0, next);
+                    }
+                    v.currentTime = next;
+                  } else if (cmd === "play" || (cmd === "toggle" && v.paused)) {
+                    var p = v.play();
+                    if (p && p.catch) p.catch(function () {});
+                  } else if (cmd === "pause" || cmd === "toggle") {
+                    v.pause();
+                  } else if (cmd === "mute") {
+                    v.muted = !v.muted;
+                  }
+                } catch (e) {}
+              }
+              broadcastCommand(cmd, value);
+            }
+            window.__lobbySeek = function (delta) { applyMediaCommand("seek", delta); };
+            window.__lobbyTransport = function (mode) { applyMediaCommand(mode, 0); };
+            window.__lobbyMute = function () { applyMediaCommand("mute", 0); };
+            window.addEventListener("message", function (e) {
+              var d = e && e.data;
+              if (d && typeof d === "object" && d.__lobbyMediaCmd) {
+                applyMediaCommand(d.__lobbyMediaCmd, d.value);
+              }
+            });
+
+            function isEditable(el) {
+              if (!el) return false;
+              var tag = (el.tagName || "").toUpperCase();
+              return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!el.isContentEditable;
+            }
+            function inFullscreen() {
+              return !!(document.fullscreenElement || document.webkitFullscreenElement);
+            }
+            function onKey(e) {
+              var k = e.key || "";
+              var kc = e.keyCode || 0;
+              if (k === "MediaRewind" || kc === 227) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                if (e.type === "keydown") applyMediaCommand("seek", -10);
+                return;
+              }
+              if (k === "MediaFastForward" || kc === 228) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                if (e.type === "keydown") applyMediaCommand("seek", 10);
+                return;
+              }
+              if (k === "MediaPlayPause" || kc === 179) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                if (e.type === "keydown" && !e.repeat) applyMediaCommand("toggle", 0);
+                return;
+              }
+              var isArrowH = k === "ArrowLeft" || k === "ArrowRight" || kc === 37 || kc === 39;
+              if (isArrowH && !inFullscreen() && !isEditable(e.target)) {
+                e.stopImmediatePropagation();
+              }
+            }
+            window.addEventListener("keydown", onKey, true);
+            window.addEventListener("keyup", onKey, true);
+            window.addEventListener("keypress", onKey, true);
+          }
+
           if (!downloadsEnabled()) return;
           if (window.__lobbyHLSCaptureInstalled) return;
           window.__lobbyHLSCaptureInstalled = true;
