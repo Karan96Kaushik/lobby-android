@@ -153,6 +153,21 @@ class BrowserController(app: Application) : AndroidViewModel(app) {
         return null
     }
 
+    fun chooseSource(source: MediaSource) {
+        if (source.id == selectedSource.id) return
+        remoteHosts = emptyList()
+        persistSession()
+        hlsCandidate = null
+        selectedSource = source
+        displayedSourceId = source.id
+        library.saveSelectedId(source.id)
+        pageTitle = sessions.savedTitle(source.id) ?: source.name
+        errorMessage = null
+        pageUrl = sessions.read(source.id, source.allowedHosts)?.url
+        loaded = false
+        publish()
+    }
+
     fun open(source: MediaSource) {
         val hadRemote = remoteHosts.isNotEmpty()
         remoteHosts = emptyList()

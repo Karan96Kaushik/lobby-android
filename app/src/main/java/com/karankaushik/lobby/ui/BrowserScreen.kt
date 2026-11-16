@@ -2,6 +2,7 @@ package com.karankaushik.lobby.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.os.Build
 import android.webkit.WebView
 import androidx.activity.compose.BackHandler
@@ -13,12 +14,15 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -62,6 +66,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
@@ -80,7 +85,9 @@ import com.karankaushik.lobby.BrowserController
 import com.karankaushik.lobby.download.HlsDownloadManager
 import com.karankaushik.lobby.remote.RemoteHub
 import com.karankaushik.lobby.remote.RemoteLink
+import com.karankaushik.lobby.device.isFireTv
 import com.karankaushik.lobby.web.applyBrowserCommand
+import com.karankaushik.lobby.remote.RemoteCommand
 import com.karankaushik.lobby.web.applyRemoteCommand
 import com.karankaushik.lobby.web.createLobbyWebView
 import com.karankaushik.lobby.web.lobbyWebView
@@ -94,6 +101,8 @@ fun BrowserScreen(controller: BrowserController, downloads: HlsDownloadManager, 
     var chromeVisible by remember { mutableStateOf(true) }
     var showRemote by remember { mutableStateOf(false) }
     var sheet by remember { mutableStateOf<LobbySheet?>(null) }
+    val fireTv = remember(context) { context.isFireTv() }
+    var browsing by remember { mutableStateOf(!fireTv) }
     var playingId by remember { mutableStateOf<String?>(null) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -118,25 +127,44 @@ fun BrowserScreen(controller: BrowserController, downloads: HlsDownloadManager, 
     }
     LaunchedEffect(remote) {
         remote.incoming.collect { command ->
+            if (command is RemoteCommand.Key && (command.name == "hidebar" || command.name == "showbar")) {
+                chromeVisible = command.name == "showbar"
+                return@collect
+            }
             val host = webHost.value ?: return@collect
             applyRemoteCommand(host, command, controller)
         }
     }
+    LaunchedEffect(fireTv) {
+        if (fireTv) remote.startHosting()
+    }
     var announcedPeer by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(remote.hostPeer) {
         val peer = remote.hostPeer
-        if (peer != null && peer != announcedPeer) controller.showNotice("$peer has the remote")
+        if (peer != null && peer != announcedPeer && browsing) {
+            controller.showNotice("$peer connected")
+            if (fireTv) showRemote = false
+        }
         announcedPeer = peer
     }
 
     val playing = playingId?.let { id -> downloads.items.firstOrNull { it.id == id } }
-    BackHandler(enabled = playing != null || sheet != null || showRemote || controller.canGoBack) {
+    BackHandler(enabled = playing != null || sheet != null || showRemote || controller.canGoBack || (fireTv && browsing)) {
         when {
             playing != null -> playingId = null
             sheet != null -> sheet = null
             showRemote -> showRemote = false
             controller.canGoBack -> controller.goBack()
+            fireTv && browsing -> {
+                controller.persistSession()
+                browsing = false
+            }
         }
+    }
+
+    if (fireTv && !browsing) {
+        FireTvHome(controller = controller, remote = remote, onWatch = { browsing = true })
+        return
     }
 
     Box(Modifier.fillMaxSize().background(LobbyBackground)) {
@@ -165,7 +193,7 @@ fun BrowserScreen(controller: BrowserController, downloads: HlsDownloadManager, 
                     onHide = { chromeVisible = false }
                 )
             }
-            if (remote.hosting) {
+            if (remote.hosting && (!fireTv || (chromeVisible && remote.hostPeer == null))) {
                 TextButton(onClick = { showRemote = true }, modifier = Modifier.fillMaxWidth()) {
                     Text(
                         if (remote.hostPeer != null) "Controlled by ${remote.hostPeer}" else "Remote PIN ${remote.pin}",
@@ -268,28 +296,31 @@ private fun Toolbar(
     onSave: () -> Unit,
     onHide: () -> Unit
 ) {
+    val television = LocalConfiguration.current.uiMode and Configuration.UI_MODE_TYPE_MASK ==
+        Configuration.UI_MODE_TYPE_TELEVISION
     Column(
         Modifier
             .fillMaxWidth()
             .background(LobbySurface.copy(alpha = 0.94f))
             .windowInsetsPadding(WindowInsets.statusBars)
+            .padding(horizontal = if (television) 48.dp else 0.dp, vertical = if (television) 8.dp else 0.dp)
     ) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+            Modifier
+                .fillMaxWidth()
+                .then(if (television) Modifier.horizontalScroll(rememberScrollState()) else Modifier)
+                .padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            TextButton(onClick = onSources) {
-                Monogram(controller.selectedSource.name, 28.dp)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    controller.selectedSource.name,
-                    color = Color.White,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+            TextButton(
+                onClick = onSources,
+                modifier = if (television) Modifier else Modifier.weight(1f, fill = false)
+            ) {
+                SourceLabel(controller.selectedSource.name)
             }
-            Spacer(Modifier.weight(1f))
+            if (!television) {
+                Spacer(Modifier.weight(1f))
+            }
             ToolIcon(Icons.AutoMirrored.Filled.ArrowBack, "Back", controller.canGoBack, controller::goBack)
             ToolIcon(Icons.AutoMirrored.Filled.ArrowForward, "Forward", controller.canGoForward, controller::goForward)
             if (controller.isLoading) {
@@ -340,6 +371,19 @@ private fun Toolbar(
             )
         }
     }
+}
+
+@Composable
+private fun RowScope.SourceLabel(name: String) {
+    Monogram(name, 28.dp)
+    Spacer(Modifier.width(8.dp))
+    Text(
+        name,
+        color = Color.White,
+        fontWeight = FontWeight.SemiBold,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis
+    )
 }
 
 @Composable

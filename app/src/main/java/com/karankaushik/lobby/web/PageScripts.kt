@@ -114,6 +114,14 @@ object PageScripts {
           if (!window.__lobbyRemoteInstalled) {
             window.__lobbyRemoteInstalled = true;
             function findLocalVideo() {
+              var fs = document.fullscreenElement || document.webkitFullscreenElement;
+              if (fs) {
+                if ((fs.tagName || "").toUpperCase() === "VIDEO") return fs;
+                if (fs.querySelector) {
+                  var inside = fs.querySelector("video");
+                  if (inside) return inside;
+                }
+              }
               var best = null;
               var bestScore = -1;
               function scan(root) {
@@ -164,14 +172,229 @@ object PageScripts {
               }
               broadcastCommand(cmd, value);
             }
+            function parentEl(node) {
+              if (!node) return null;
+              if (node.parentElement) return node.parentElement;
+              var root = node.getRootNode && node.getRootNode();
+              if (root && root.host) return root.host;
+              return null;
+            }
+            function playerShell(video) {
+              var node = parentEl(video);
+              for (var i = 0; i < 6 && node && node !== document.body && node !== document.documentElement; i++) {
+                if (node.querySelector && node.querySelector("button, [role='button'], [role='slider']")) return node;
+                node = parentEl(node);
+              }
+              return video;
+            }
+            function enterFullscreen() {
+              var fs = document.fullscreenElement || document.webkitFullscreenElement;
+              if (fs) return;
+              var v = findLocalVideo();
+              var target = v ? playerShell(v) : null;
+              var entered = false;
+              if (target) {
+                try {
+                  if (target.requestFullscreen) { target.requestFullscreen(); entered = true; }
+                  else if (target.webkitRequestFullscreen) { target.webkitRequestFullscreen(); entered = true; }
+                } catch (e) {}
+              }
+              if (!entered) broadcastCommand("fullscreen", 0);
+            }
+            function exitFullscreen() {
+              var fs = document.fullscreenElement || document.webkitFullscreenElement;
+              if (!fs) return;
+              try {
+                if (document.exitFullscreen) document.exitFullscreen();
+                else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+              } catch (e) {}
+              broadcastCommand("exitfs", 0);
+            }
+            function toggleFullscreen() {
+              var fs = document.fullscreenElement || document.webkitFullscreenElement;
+              if (fs) exitFullscreen();
+              else enterFullscreen();
+            }
+            function changeVolume(delta) {
+              var v = findLocalVideo();
+              if (v && (v.readyState > 0 || v.currentSrc || v.src)) {
+                var next = Math.min(1, Math.max(0, Number(v.volume) + Number(delta || 0)));
+                v.volume = next;
+                v.muted = next === 0;
+              }
+              broadcastCommand("volume", delta);
+            }
+            function revealControls(root) {
+              if (!root) return;
+              try {
+                var box = root.getBoundingClientRect();
+                root.dispatchEvent(new MouseEvent("mousemove", {
+                  bubbles: true,
+                  cancelable: true,
+                  clientX: box.left + box.width / 2,
+                  clientY: box.top + Math.max(8, box.height - 24)
+                }));
+              } catch (e) {}
+              if (!root.querySelectorAll) return;
+              var bars = root.querySelectorAll(".vjs-user-inactive, .jw-flag-user-inactive, .plyr--hide-controls");
+              for (var i = 0; i < bars.length; i++) {
+                bars[i].classList.remove("vjs-user-inactive", "jw-flag-user-inactive", "plyr--hide-controls");
+                bars[i].classList.add("vjs-user-active", "jw-flag-user-active");
+              }
+            }
+            function controlButtons(root) {
+              var found = [];
+              var selector = "button, a[href], [role='button'], [role='slider'], [role='menuitem'], input, select";
+              function walk(node) {
+                if (!node || !node.querySelectorAll) return;
+                var nodes = node.querySelectorAll(selector);
+                for (var i = 0; i < nodes.length; i++) {
+                  var el = nodes[i];
+                  if (el.disabled) continue;
+                  if ((el.tagName || "").toUpperCase() === "VIDEO") continue;
+                  var tab = el.getAttribute && el.getAttribute("tabindex");
+                  if (tab === "-1") continue;
+                  var rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+                  if (!rect || rect.width < 8 || rect.height < 8) continue;
+                  var style = window.getComputedStyle(el);
+                  if (style.display === "none" || style.visibility === "hidden") continue;
+                  found.push(el);
+                }
+                var all = node.querySelectorAll("*");
+                for (var j = 0; j < all.length; j++) {
+                  if (all[j].shadowRoot) walk(all[j].shadowRoot);
+                }
+              }
+              walk(root);
+              return found;
+            }
+            function markFocused(el) {
+              var previous = window.__lobbyFocused;
+              if (previous && previous !== el) previous.style.outline = window.__lobbyFocusedOutline || "";
+              window.__lobbyFocused = el;
+              window.__lobbyFocusedOutline = el.style.outline;
+              el.style.outline = "3px solid #95FF50";
+              el.style.outlineOffset = "2px";
+              try { el.focus(); } catch (e) {}
+            }
+            function moveFocus(root, dir) {
+              revealControls(root);
+              var items = controlButtons(root);
+              if (!items.length) return false;
+              var current = document.activeElement;
+              var index = items.indexOf(current);
+              if (index < 0 && window.__lobbyFocused && items.indexOf(window.__lobbyFocused) >= 0) {
+                current = window.__lobbyFocused;
+                index = items.indexOf(current);
+              }
+              if (index < 0) {
+                markFocused(items[0]);
+                return true;
+              }
+              var rect = current.getBoundingClientRect();
+              var cx = rect.left + rect.width / 2;
+              var cy = rect.top + rect.height / 2;
+              var best = null;
+              var bestScore = Infinity;
+              for (var i = 0; i < items.length; i++) {
+                var el = items[i];
+                if (el === current) continue;
+                var next = el.getBoundingClientRect();
+                var dx = (next.left + next.width / 2) - cx;
+                var dy = (next.top + next.height / 2) - cy;
+                var along = dir === "left" ? -dx : dir === "right" ? dx : dir === "up" ? -dy : dy;
+                var across = dir === "left" || dir === "right" ? Math.abs(dy) : Math.abs(dx);
+                if (along < 8) continue;
+                var score = along + across * 3;
+                if (score < bestScore) { bestScore = score; best = el; }
+              }
+              if (!best) return true;
+              markFocused(best);
+              return true;
+            }
+            function activateFocused() {
+              var el = window.__lobbyFocused || document.activeElement;
+              if (!el || el === document.body || el === document.documentElement) return false;
+              if ((el.tagName || "").toUpperCase() === "VIDEO") return false;
+              try { el.click(); } catch (e) { return false; }
+              return true;
+            }
+            function navigateUi(dir) {
+              var fs = document.fullscreenElement || document.webkitFullscreenElement;
+              if (!fs) return;
+              if ((fs.tagName || "").toUpperCase() === "IFRAME") {
+                broadcastCommand("nav", dir);
+                return;
+              }
+              if (!moveFocus(fs, dir)) broadcastCommand("nav", dir);
+            }
+            function runRemoteKey(name) {
+              if (name === "left" || name === "right" || name === "up" || name === "down") navigateUi(name);
+              else if (name === "select") {
+                if (!activateFocused()) broadcastCommand("activate", 0);
+              }
+              else if (name === "play") applyMediaCommand("toggle", 0);
+              else if (name === "resume") applyMediaCommand("play", 0);
+              else if (name === "pause") applyMediaCommand("pause", 0);
+              else if (name === "seekback") applyMediaCommand("seek", -10);
+              else if (name === "seekfwd") applyMediaCommand("seek", 10);
+              else if (name === "mute") applyMediaCommand("mute", 0);
+            }
             window.__lobbySeek = function (delta) { applyMediaCommand("seek", delta); };
             window.__lobbyTransport = function (mode) { applyMediaCommand(mode, 0); };
             window.__lobbyMute = function () { applyMediaCommand("mute", 0); };
+            window.__lobbyFullscreen = toggleFullscreen;
+            window.__lobbyEnterFullscreen = enterFullscreen;
+            window.__lobbyExitFullscreen = exitFullscreen;
+            window.__lobbyRemoteKey = function (name) { runRemoteKey(String(name || "")); };
+            function fullscreenShortcut(e) {
+              var k = e.key || "";
+              var c = e.code || "";
+              var kc = e.keyCode || 0;
+              var exit = k === "F10" || c === "F10" || kc === 121 || kc === 140;
+              var enter = k === "F11" || c === "F11" || kc === 122 || kc === 141;
+              if (!exit && !enter) return;
+              if (e.repeat) return;
+              e.preventDefault();
+              e.stopPropagation();
+              if (e.type !== "keydown") return;
+              if (exit) exitFullscreen();
+              else enterFullscreen();
+            }
+            window.addEventListener("keydown", fullscreenShortcut, true);
+            window.addEventListener("keyup", fullscreenShortcut, true);
             window.addEventListener("message", function (e) {
               var d = e && e.data;
-              if (d && typeof d === "object" && d.__lobbyMediaCmd) {
-                applyMediaCommand(d.__lobbyMediaCmd, d.value);
+              if (!d || typeof d !== "object" || !d.__lobbyMediaCmd) return;
+              if (d.__lobbyMediaCmd === "fullscreen") {
+                enterFullscreen();
+                return;
               }
+              if (d.__lobbyMediaCmd === "exitfs") {
+                try {
+                  if (document.exitFullscreen) document.exitFullscreen();
+                  else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+                } catch (err) {}
+                return;
+              }
+              if (d.__lobbyMediaCmd === "volume") {
+                var clip = findLocalVideo();
+                if (clip && (clip.readyState > 0 || clip.currentSrc || clip.src)) {
+                  var level = Math.min(1, Math.max(0, Number(clip.volume) + Number(d.value || 0)));
+                  clip.volume = level;
+                  clip.muted = level === 0;
+                }
+                return;
+              }
+              if (d.__lobbyMediaCmd === "nav") {
+                moveFocus(document.body, d.value);
+                return;
+              }
+              if (d.__lobbyMediaCmd === "activate") {
+                activateFocused();
+                return;
+              }
+              applyMediaCommand(d.__lobbyMediaCmd, d.value);
             });
 
             function isEditable(el) {
@@ -201,6 +424,15 @@ object PageScripts {
                 e.preventDefault();
                 e.stopImmediatePropagation();
                 if (e.type === "keydown" && !e.repeat) applyMediaCommand("toggle", 0);
+                return;
+              }
+              var isArrow = k === "ArrowLeft" || k === "ArrowRight" || k === "ArrowUp" || k === "ArrowDown" || kc === 37 || kc === 38 || kc === 39 || kc === 40;
+              if (isArrow && inFullscreen() && !isEditable(e.target)) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                if (e.type !== "keydown" || e.repeat) return;
+                var dir = (k === "ArrowLeft" || kc === 37) ? "left" : (k === "ArrowRight" || kc === 39) ? "right" : (k === "ArrowUp" || kc === 38) ? "up" : "down";
+                navigateUi(dir);
                 return;
               }
               var isArrowH = k === "ArrowLeft" || k === "ArrowRight" || kc === 37 || kc === 39;

@@ -142,33 +142,58 @@ fun applyRemoteCommand(swipe: SwipeRefreshLayout, command: RemoteCommand, contro
             if (error != null) controller.showNotice(error)
         }
         is RemoteCommand.Key -> when (command.name) {
-            "back" -> controller.goBack()
+            "back" -> if (VideoFullscreen.isShowing()) VideoFullscreen.requestExit() else controller.goBack()
             "forward" -> controller.goForward()
             "home" -> controller.goHome()
             "reload" -> controller.reload()
             "stop" -> controller.stop()
-            "up" -> webView?.let { tapKey(it, KeyEvent.KEYCODE_DPAD_UP) }
-            "down" -> webView?.let { tapKey(it, KeyEvent.KEYCODE_DPAD_DOWN) }
-            "left" -> webView?.let { tapKey(it, KeyEvent.KEYCODE_DPAD_LEFT) }
-            "right" -> webView?.let { tapKey(it, KeyEvent.KEYCODE_DPAD_RIGHT) }
-            "select" -> webView?.let { tapKey(it, KeyEvent.KEYCODE_DPAD_CENTER) }
+            "up" -> sendPlayerKey(webView, "up", KeyEvent.KEYCODE_DPAD_UP)
+            "down" -> sendPlayerKey(webView, "down", KeyEvent.KEYCODE_DPAD_DOWN)
+            "left" -> sendPlayerKey(webView, "left", KeyEvent.KEYCODE_DPAD_LEFT)
+            "right" -> sendPlayerKey(webView, "right", KeyEvent.KEYCODE_DPAD_RIGHT)
+            "select" -> sendPlayerKey(webView, "select", KeyEvent.KEYCODE_DPAD_CENTER)
             "pageup" -> webView?.let { tapKey(it, KeyEvent.KEYCODE_PAGE_UP) }
             "pagedown" -> webView?.let { tapKey(it, KeyEvent.KEYCODE_PAGE_DOWN) }
-            "play" -> webView?.let { tapKey(it, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) }
-            "seekback" -> webView?.let { tapKey(it, KeyEvent.KEYCODE_MEDIA_REWIND) }
-            "seekfwd" -> webView?.let { tapKey(it, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD) }
-            "mute" -> webView?.evaluateJavascript("window.__lobbyMute && window.__lobbyMute()", null)
+            "play" -> sendPlayerKey(webView, "play", KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+            "seekback" -> sendPlayerKey(webView, "seekback", KeyEvent.KEYCODE_MEDIA_REWIND)
+            "seekfwd" -> sendPlayerKey(webView, "seekfwd", KeyEvent.KEYCODE_MEDIA_FAST_FORWARD)
+            "seekback5" -> webView?.evaluateJavascript("window.__lobbySeek && window.__lobbySeek(-300)", null)
+            "seekfwd5" -> webView?.evaluateJavascript("window.__lobbySeek && window.__lobbySeek(300)", null)
+            "mute" -> sendPlayerKey(webView, "mute", KeyEvent.KEYCODE_VOLUME_MUTE)
+            "fullscreen" -> webView?.let { dispatchFullscreenKey(it, KeyEvent.KEYCODE_F11) }
+            "exitfullscreen" -> webView?.let { view ->
+                dispatchFullscreenKey(view, KeyEvent.KEYCODE_F10)
+                if (VideoFullscreen.isShowing()) VideoFullscreen.requestExit()
+            }
         }
     }
 }
 
-private fun tapKey(webView: WebView, keyCode: Int) {
+private fun sendPlayerKey(webView: WebView?, name: String, keyCode: Int) {
+    if (VideoFullscreen.isShowing()) {
+        webView?.evaluateJavascript("window.__lobbyRemoteKey&&window.__lobbyRemoteKey('$name')", null)
+    } else {
+        webView?.let { tapKey(it, keyCode) }
+    }
+}
+
+private fun dispatchFullscreenKey(webView: WebView, keyCode: Int) {
     webView.isFocusable = true
     webView.isFocusableInTouchMode = true
     if (!webView.hasFocus()) webView.requestFocus()
     val downAt = SystemClock.uptimeMillis()
     webView.dispatchKeyEvent(KeyEvent(downAt, downAt, KeyEvent.ACTION_DOWN, keyCode, 0))
     webView.dispatchKeyEvent(KeyEvent(downAt, SystemClock.uptimeMillis(), KeyEvent.ACTION_UP, keyCode, 0))
+}
+
+private fun tapKey(webView: WebView, keyCode: Int) {
+    val target = VideoFullscreen.keyTarget() ?: webView
+    target.isFocusable = true
+    target.isFocusableInTouchMode = true
+    if (!target.hasFocus()) target.requestFocus()
+    val downAt = SystemClock.uptimeMillis()
+    target.dispatchKeyEvent(KeyEvent(downAt, downAt, KeyEvent.ACTION_DOWN, keyCode, 0))
+    target.dispatchKeyEvent(KeyEvent(downAt, SystemClock.uptimeMillis(), KeyEvent.ACTION_UP, keyCode, 0))
 }
 
 private fun installDocumentScript(webView: WebView) {
@@ -334,6 +359,8 @@ private class LobbyChromeClient(
         }
         customView = view
         customCallback = callback
+        view.isFocusable = true
+        view.isFocusableInTouchMode = true
         decor.addView(
             view,
             FrameLayout.LayoutParams(
@@ -341,14 +368,84 @@ private class LobbyChromeClient(
                 FrameLayout.LayoutParams.MATCH_PARENT
             )
         )
+        view.requestFocus()
+        VideoFullscreen.enter(webView, view, ::onHideCustomView)
     }
 
     override fun onHideCustomView() {
+        if (customView == null && customCallback == null) return
         val decor = webView.context.findActivity()?.window?.decorView as? FrameLayout
         customView?.let { decor?.removeView(it) }
         customView = null
-        customCallback?.onCustomViewHidden()
+        val callback = customCallback
         customCallback = null
+        VideoFullscreen.clear(webView)
+        callback?.onCustomViewHidden()
+    }
+}
+
+/**
+ * Fullscreen video is a separate view over the page. The Fire TV remote would
+ * otherwise move focus in the controls hidden underneath it.
+ */
+object VideoFullscreen {
+    private var webView: WebView? = null
+    private var surface: View? = null
+    private var exit: (() -> Unit)? = null
+
+    fun enter(webView: WebView, surface: View, exit: () -> Unit) {
+        this.webView = webView
+        this.surface = surface
+        this.exit = exit
+    }
+
+    fun clear(webView: WebView) {
+        if (this.webView !== webView) return
+        this.webView = null
+        this.surface = null
+        this.exit = null
+    }
+
+    fun isShowing(): Boolean = webView != null
+
+    fun keyTarget(): View? = surface
+
+    fun requestExit() {
+        exit?.invoke()
+    }
+
+    fun dispatch(event: KeyEvent): Boolean {
+        val page = webView ?: return false
+        val code = event.keyCode
+        if (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_ESCAPE) {
+            if (event.action == KeyEvent.ACTION_UP && event.repeatCount == 0) exit?.invoke()
+            return true
+        }
+        val name = commandFor(code) ?: return false
+        if (name == "up" || name == "down" || name == "left" || name == "right" || name == "select") {
+            if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount > 0 && name == "select") return true
+            page.evaluateJavascript("window.__lobbyRemoteKey&&window.__lobbyRemoteKey('$name')", null)
+            return true
+        }
+        if (event.action != KeyEvent.ACTION_DOWN) return true
+        if ((name == "play" || name == "pause") && event.repeatCount > 0) return true
+        page.evaluateJavascript("window.__lobbyRemoteKey&&window.__lobbyRemoteKey('$name')", null)
+        return true
+    }
+
+    private fun commandFor(code: Int): String? = when (code) {
+        KeyEvent.KEYCODE_DPAD_UP -> "up"
+        KeyEvent.KEYCODE_DPAD_DOWN -> "down"
+        KeyEvent.KEYCODE_DPAD_LEFT -> "left"
+        KeyEvent.KEYCODE_DPAD_RIGHT -> "right"
+        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
+        KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_BUTTON_A -> "select"
+        KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> "play"
+        KeyEvent.KEYCODE_MEDIA_PAUSE -> "pause"
+        KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_PREVIOUS -> "seekback"
+        KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_NEXT -> "seekfwd"
+        KeyEvent.KEYCODE_VOLUME_MUTE, KeyEvent.KEYCODE_MUTE -> "mute"
+        else -> null
     }
 }
 

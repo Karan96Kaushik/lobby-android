@@ -60,6 +60,7 @@ import java.util.Locale
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SourcesSheet(controller: BrowserController, onOpen: () -> Unit) {
+    var adding by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
     var address by remember { mutableStateOf("") }
     var allowsDownload by remember { mutableStateOf(false) }
@@ -103,41 +104,69 @@ fun SourcesSheet(controller: BrowserController, onOpen: () -> Unit) {
             }
         }
         Spacer(Modifier.height(16.dp))
-        Text("Add a source", color = Color.White.copy(alpha = 0.6f))
-        OutlinedTextField(
-            value = name,
-            onValueChange = { name = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Name (optional)") },
-            singleLine = true
-        )
-        OutlinedTextField(
-            value = address,
-            onValueChange = { address = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("https://example.com") },
-            singleLine = true
-        )
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
-            Text("Allow offline downloads", color = Color.White, modifier = Modifier.weight(1f))
-            Switch(checked = allowsDownload, onCheckedChange = { allowsDownload = it })
+        if (!adding) {
+            Button(
+                onClick = {
+                    name = ""
+                    address = ""
+                    allowsDownload = false
+                    addError = null
+                    adding = true
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Add source")
+            }
+        } else {
+            Text("Add a source", color = Color.White.copy(alpha = 0.6f))
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Name (optional)") },
+                singleLine = true
+            )
+            OutlinedTextField(
+                value = address,
+                onValueChange = {
+                    address = it
+                    addError = null
+                },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("https://example.com") },
+                singleLine = true
+            )
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+                Text("Allow offline downloads", color = Color.White, modifier = Modifier.weight(1f))
+                Switch(checked = allowsDownload, onCheckedChange = { allowsDownload = it })
+            }
+            addError?.let { Text(it, color = Color(0xFFFF8A80), modifier = Modifier.padding(top = 4.dp)) }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+            ) {
+                TextButton(
+                    onClick = { adding = false },
+                    modifier = Modifier.weight(1f)
+                ) { Text("Cancel") }
+                Button(
+                    onClick = {
+                        val message = controller.addSource(name, address, allowsDownload)
+                        if (message == null) onOpen() else addError = message
+                    },
+                    enabled = address.isNotBlank(),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Add")
+                }
+            }
+            Text(
+                "Use the site’s main address. Lobby keeps you on that site. Offline save is off unless this switch is on.",
+                color = Color.White.copy(alpha = 0.6f),
+                modifier = Modifier.padding(top = 8.dp)
+            )
         }
-        addError?.let { Text(it, color = Color(0xFFFF8A80), modifier = Modifier.padding(top = 4.dp)) }
-        Button(
-            onClick = {
-                val message = controller.addSource(name, address, allowsDownload)
-                if (message == null) onOpen() else addError = message
-            },
-            enabled = address.isNotBlank(),
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
-        ) {
-            Text("Add source")
-        }
-        Text(
-            "Use the site’s main address. Lobby keeps you on that site. Offline save is off unless this switch is on.",
-            color = Color.White.copy(alpha = 0.6f),
-            modifier = Modifier.padding(top = 8.dp, bottom = 20.dp)
-        )
+        Spacer(Modifier.height(20.dp))
     }
 }
 

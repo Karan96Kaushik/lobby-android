@@ -30,12 +30,14 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.UUID
 
 data class DiscoveredPeer(
     val name: String,
     val address: InetAddress,
     val port: Int,
-    val seenAt: Long
+    val seenAt: Long,
+    val id: String = ""
 )
 
 sealed interface RemoteLink {
@@ -53,7 +55,8 @@ sealed interface RemoteCommand {
         val keys = setOf(
             "up", "down", "left", "right", "select",
             "back", "forward", "play", "home", "reload", "stop",
-            "pageup", "pagedown", "seekback", "seekfwd", "mute"
+            "pageup", "pagedown", "seekback", "seekfwd", "seekback5", "seekfwd5",
+            "mute", "fullscreen", "exitfullscreen", "hidebar", "showbar"
         )
 
         fun fromKey(name: String): Key? = if (name in keys) Key(name) else null
@@ -85,6 +88,10 @@ class RemoteHub(private val context: Context) {
     private val main = Handler(Looper.getMainLooper())
     private val random = SecureRandom()
     private val gate = Any()
+    private val prefs = context.getSharedPreferences("lobby_remote", Context.MODE_PRIVATE)
+    private val deviceId: String = prefs.getString(KEY_DEVICE_ID, null) ?: UUID.randomUUID().toString().also {
+        prefs.edit().putString(KEY_DEVICE_ID, it).apply()
+    }
 
     @Volatile private var hostRunning = false
     @Volatile private var scanRunning = false
@@ -92,6 +99,10 @@ class RemoteHub(private val context: Context) {
     @Volatile private var paired = false
     @Volatile private var pinFailures = 0
     @Volatile private var connectGeneration = 0
+    @Volatile private var rememberedId = prefs.getString(KEY_PAIRED_ID, "").orEmpty()
+    @Volatile private var savedHostId = prefs.getString(KEY_TARGET_ID, "").orEmpty()
+    @Volatile private var savedHostPin = prefs.getString(KEY_TARGET_PIN, "").orEmpty()
+    @Volatile private var lastReconnectAt = 0L
 
     private var udpSocket: DatagramSocket? = null
     private var tcpServer: ServerSocket? = null
@@ -107,16 +118,18 @@ class RemoteHub(private val context: Context) {
 
     fun startHosting() {
         if (hostRunning) return
-        val fresh = newPin()
+        val saved = rememberedPair()
+        val fresh = saved?.pin ?: newPin()
         hostRunning = true
         armedPin = fresh
-        paired = false
+        paired = saved != null
+        rememberedId = saved?.id.orEmpty()
         pinFailures = 0
         onMain {
             fault = null
             hosting = true
             pin = fresh
-            hostPeer = null
+            hostPeer = saved?.name?.takeIf { it.isNotBlank() }
         }
         scope.launch {
             val server = try {
@@ -149,6 +162,7 @@ class RemoteHub(private val context: Context) {
     fun regeneratePin() {
         if (!hostRunning) return
         val fresh = newPin()
+        forgetController()
         val previous = synchronized(gate) {
             armedPin = fresh
             paired = false
@@ -252,6 +266,7 @@ class RemoteHub(private val context: Context) {
                         .put("t", "pair")
                         .put("pin", digits)
                         .put("name", deviceName)
+                        .put("id", deviceId)
                         .toString()
                 )
                 val reader = socket.getInputStream().bufferedReader(Charsets.UTF_8)
@@ -263,34 +278,41 @@ class RemoteHub(private val context: Context) {
                 if (reply?.optInt("v") != 1 || reply.optString("t") != "paired") {
                     socket.close()
                     val message = when (reply?.optString("reason")) {
-                        "busy" -> "That Lobby is already paired. Ask for a new PIN."
+                        "busy" -> "That Lobby is already paired. Unpair it before using another phone."
                         "pin" -> "That PIN was rejected."
                         else -> "Couldn't pair."
+                    }
+                    if (reply?.optString("reason") == "pin" || reply?.optString("reason") == "busy") {
+                        clearSavedTarget()
                     }
                     onMain { link = RemoteLink.Failed(message) }
                     return@launch
                 }
                 socket.soTimeout = 0
                 controllerSocket = socket
+                saveTarget(peer.id, digits)
                 val name = cleanName(reply.optString("name").ifBlank { peer.name })
                 onMain { link = RemoteLink.Connected(name) }
                 val connected = socket
                 clientReadJob = launch {
+                    var unpaired = false
                     try {
                         while (isActive && controllerSocket === connected) {
                             val line = reader.readLine() ?: break
                             val json = runCatching { JSONObject(line) }.getOrNull() ?: continue
-                            if (json.optString("t") == "bye") break
+                            if (json.optString("t") == "bye") {
+                                unpaired = true
+                                break
+                            }
                         }
                     } catch (_: Exception) {
                     }
                     if (controllerSocket === connected) {
                         controllerSocket = null
                         runCatching { connected.close() }
+                        if (unpaired) clearSavedTarget()
                         onMain {
-                            if (link is RemoteLink.Connected) {
-                                link = RemoteLink.Failed("The other device disconnected.")
-                            }
+                            if (link is RemoteLink.Connected) link = RemoteLink.Idle
                         }
                     }
                 }
@@ -304,6 +326,7 @@ class RemoteHub(private val context: Context) {
     }
 
     fun disconnect() {
+        clearSavedTarget()
         connectGeneration++
         clientReadJob?.cancel()
         val socket = controllerSocket
@@ -336,7 +359,7 @@ class RemoteHub(private val context: Context) {
                 if (controllerSocket === socket) {
                     controllerSocket = null
                     runCatching { socket.close() }
-                    onMain { link = RemoteLink.Failed("The other device disconnected.") }
+                    onMain { if (link is RemoteLink.Connected) link = RemoteLink.Idle }
                 }
             }
         }
@@ -358,6 +381,7 @@ class RemoteHub(private val context: Context) {
     }
 
     private fun greet(socket: Socket) {
+        var unpair = false
         try {
             socket.tcpNoDelay = true
             socket.keepAlive = true
@@ -365,37 +389,42 @@ class RemoteHub(private val context: Context) {
             val reader = socket.getInputStream().bufferedReader(Charsets.UTF_8)
             val json = runCatching { JSONObject(reader.readLine() ?: "") }.getOrNull()
             val entered = json?.optString("pin").orEmpty()
+            val clientId = json?.optString("id").orEmpty()
             val name = cleanName(json?.optString("name").orEmpty())
             if (json?.optInt("v") != 1 || json.optString("t") != "pair") {
                 runCatching { socket.close() }
                 return
             }
-            val acceptedNow = synchronized(gate) {
-                when {
+            val replaced = synchronized(gate) {
+                val known = rememberedId
+                val allowed = when {
                     !hostRunning -> "closed"
-                    paired || accepted != null -> "busy"
+                    clientId.isBlank() -> "pin"
+                    known.isNotEmpty() && clientId != known -> "busy"
                     !pinsMatch(entered, armedPin) -> "pin"
-                    else -> {
-                        paired = true
-                        armedPin = ""
-                        accepted = socket
-                        "ok"
-                    }
+                    else -> "ok"
                 }
+                if (allowed != "ok") return@synchronized allowed to null
+                if (known.isEmpty()) rememberController(clientId, name, armedPin)
+                paired = true
+                val previous = accepted?.takeIf { it !== socket }
+                accepted = socket
+                "ok" to previous
             }
-            if (acceptedNow != "ok") {
-                if (acceptedNow == "pin") notePinFailure()
-                if (acceptedNow == "pin" || acceptedNow == "busy") {
+            if (replaced.first != "ok") {
+                if (replaced.first == "pin") notePinFailure()
+                if (replaced.first == "pin" || replaced.first == "busy") {
                     runCatching {
                         writeLine(
                             socket,
-                            JSONObject().put("v", 1).put("t", "reject").put("reason", acceptedNow).toString()
+                            JSONObject().put("v", 1).put("t", "reject").put("reason", replaced.first).toString()
                         )
                     }
                 }
                 runCatching { socket.close() }
                 return
             }
+            replaced.second?.let { previous -> runCatching { previous.close() } }
             writeLine(
                 socket,
                 JSONObject().put("v", 1).put("t", "paired").put("name", deviceName).toString()
@@ -414,7 +443,10 @@ class RemoteHub(private val context: Context) {
                             val url = command.optString("u")
                             if (url.length <= 2048) _incoming.tryEmit(RemoteCommand.Url(url))
                         }
-                        "bye" -> break
+                        "bye" -> {
+                            unpair = true
+                            break
+                        }
                     }
                 }
             } catch (_: Exception) {
@@ -424,18 +456,30 @@ class RemoteHub(private val context: Context) {
             val wasCurrent = synchronized(gate) {
                 if (accepted === socket) {
                     accepted = null
-                    paired = false
                     true
                 } else {
                     false
                 }
             }
             runCatching { socket.close() }
-            if (wasCurrent) onMain { hostPeer = null }
+            if (wasCurrent && unpair) {
+                val fresh = newPin()
+                forgetController()
+                synchronized(gate) {
+                    armedPin = fresh
+                    paired = false
+                    pinFailures = 0
+                }
+                onMain {
+                    hostPeer = null
+                    pin = fresh
+                }
+            }
         }
     }
 
     private fun notePinFailure() {
+        if (rememberedId.isNotEmpty()) return
         val fresh = synchronized(gate) {
             pinFailures += 1
             if (pinFailures < 5) return
@@ -494,7 +538,8 @@ class RemoteHub(private val context: Context) {
                             name = cleanName(json.optString("name")),
                             address = packet.address,
                             port = port,
-                            seenAt = SystemClock.elapsedRealtime()
+                            seenAt = SystemClock.elapsedRealtime(),
+                            id = json.optString("id")
                         )
                     )
                 }
@@ -527,6 +572,7 @@ class RemoteHub(private val context: Context) {
         .put("t", "hello")
         .put("name", deviceName)
         .put("port", port)
+        .put("id", deviceId)
         .toString()
         .toByteArray(Charsets.UTF_8)
 
@@ -546,7 +592,19 @@ class RemoteHub(private val context: Context) {
             peers = (peers.filterNot { it.address == peer.address && it.port == peer.port } + peer)
                 .filter { now - it.seenAt < PEER_TTL_MS }
                 .sortedBy { it.name.lowercase() }
+            maybeReconnect(peer)
         }
+    }
+
+    private fun maybeReconnect(peer: DiscoveredPeer) {
+        val id = savedHostId
+        val pin = savedHostPin
+        if (id.isBlank() || pin.length != 4 || peer.id != id) return
+        if (link is RemoteLink.Connected || link is RemoteLink.Connecting) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastReconnectAt < 4000) return
+        lastReconnectAt = now
+        connect(peer, pin)
     }
 
     private fun ensurePrune() {
@@ -564,6 +622,7 @@ class RemoteHub(private val context: Context) {
 
     private fun haltHost(error: String?) {
         hostRunning = false
+        forgetController()
         armedPin = ""
         paired = false
         announceJob?.cancel()
@@ -657,6 +716,44 @@ class RemoteHub(private val context: Context) {
         repeat(4) { append(random.nextInt(10)) }
     }
 
+    private data class RememberedController(val id: String, val name: String, val pin: String)
+
+    private fun rememberedPair(): RememberedController? {
+        val id = prefs.getString(KEY_PAIRED_ID, "").orEmpty()
+        val name = prefs.getString(KEY_PAIRED_NAME, "").orEmpty()
+        val pin = prefs.getString(KEY_PAIRED_PIN, "").orEmpty()
+        if (id.isBlank() || pin.length != 4) return null
+        return RememberedController(id, name, pin)
+    }
+
+    private fun rememberController(id: String, name: String, pin: String) {
+        rememberedId = id
+        prefs.edit()
+            .putString(KEY_PAIRED_ID, id)
+            .putString(KEY_PAIRED_NAME, name)
+            .putString(KEY_PAIRED_PIN, pin)
+            .apply()
+    }
+
+    private fun forgetController() {
+        rememberedId = ""
+        paired = false
+        prefs.edit().remove(KEY_PAIRED_ID).remove(KEY_PAIRED_NAME).remove(KEY_PAIRED_PIN).apply()
+    }
+
+    private fun saveTarget(id: String, pin: String) {
+        if (id.isBlank() || pin.length != 4) return
+        savedHostId = id
+        savedHostPin = pin
+        prefs.edit().putString(KEY_TARGET_ID, id).putString(KEY_TARGET_PIN, pin).apply()
+    }
+
+    private fun clearSavedTarget() {
+        savedHostId = ""
+        savedHostPin = ""
+        prefs.edit().remove(KEY_TARGET_ID).remove(KEY_TARGET_PIN).apply()
+    }
+
     private fun pinsMatch(entered: String, expected: String): Boolean {
         if (expected.length != 4 || entered.length != 4) return false
         return MessageDigest.isEqual(entered.toByteArray(), expected.toByteArray())
@@ -680,6 +777,12 @@ class RemoteHub(private val context: Context) {
     companion object {
         private const val DISCOVERY_PORT = 47831
         private const val PEER_TTL_MS = 7000L
+        private const val KEY_DEVICE_ID = "device_id"
+        private const val KEY_PAIRED_ID = "paired_id"
+        private const val KEY_PAIRED_NAME = "paired_name"
+        private const val KEY_PAIRED_PIN = "paired_pin"
+        private const val KEY_TARGET_ID = "target_id"
+        private const val KEY_TARGET_PIN = "target_pin"
 
         private fun cleanName(raw: String): String {
             val cleaned = raw.replace(Regex("[\\p{Cntrl}]"), "").trim().take(40)
