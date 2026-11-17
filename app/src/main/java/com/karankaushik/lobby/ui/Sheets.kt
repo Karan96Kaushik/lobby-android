@@ -186,7 +186,7 @@ private fun SourceRow(
             .combinedClickable(onClick = onOpen, onLongClick = { onToggle(!source.allowsDownload) }),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Monogram(source.name, 36.dp)
+        SourceLogo(source, 36.dp)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {

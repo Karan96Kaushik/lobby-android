@@ -13,6 +13,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -65,7 +66,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -83,6 +86,7 @@ import androidx.media3.ui.PlayerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.karankaushik.lobby.BrowserController
 import com.karankaushik.lobby.download.HlsDownloadManager
+import com.karankaushik.lobby.model.MediaSource
 import com.karankaushik.lobby.remote.RemoteHub
 import com.karankaushik.lobby.remote.RemoteLink
 import com.karankaushik.lobby.device.isFireTv
@@ -163,7 +167,14 @@ fun BrowserScreen(controller: BrowserController, downloads: HlsDownloadManager, 
     }
 
     if (fireTv && !browsing) {
-        FireTvHome(controller = controller, remote = remote, onWatch = { browsing = true })
+        FireTvHome(
+            controller = controller,
+            remote = remote,
+            onWatch = {
+                controller.armFireTvEntry()
+                browsing = true
+            }
+        )
         return
     }
 
@@ -230,7 +241,7 @@ fun BrowserScreen(controller: BrowserController, downloads: HlsDownloadManager, 
                             .padding(12.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Monogram(controller.selectedSource.name, 22.dp)
+                            SourceLogo(controller.selectedSource, 22.dp)
                             Spacer(Modifier.width(8.dp))
                             Text(controller.selectedSource.name, color = Color.White, maxLines = 1)
                             Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Show controls", tint = Color.White)
@@ -316,7 +327,7 @@ private fun Toolbar(
                 onClick = onSources,
                 modifier = if (television) Modifier else Modifier.weight(1f, fill = false)
             ) {
-                SourceLabel(controller.selectedSource.name)
+                SourceLabel(controller.selectedSource)
             }
             if (!television) {
                 Spacer(Modifier.weight(1f))
@@ -374,11 +385,11 @@ private fun Toolbar(
 }
 
 @Composable
-private fun RowScope.SourceLabel(name: String) {
-    Monogram(name, 28.dp)
+private fun RowScope.SourceLabel(source: MediaSource) {
+    SourceLogo(source, 28.dp)
     Spacer(Modifier.width(8.dp))
     Text(
-        name,
+        source.name,
         color = Color.White,
         fontWeight = FontWeight.SemiBold,
         maxLines = 1,
@@ -414,6 +425,29 @@ private fun ErrorOverlay(message: String, onHome: () -> Unit, onRetry: () -> Uni
             TextButton(onClick = onHome) { Text("Home") }
             TextButton(onClick = onRetry) { Text("Try Again", color = LobbyAccent) }
         }
+    }
+}
+
+@Composable
+fun SourceLogo(source: MediaSource, size: androidx.compose.ui.unit.Dp) {
+    val context = LocalContext.current
+    var logo by remember(source.home) { mutableStateOf(SourceLogos.peek(source.home)) }
+    LaunchedEffect(source.home) {
+        if (logo != null) return@LaunchedEffect
+        logo = SourceLogos.load(context, source.home)
+    }
+    val bitmap = logo
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = source.name,
+            modifier = Modifier
+                .size(size)
+                .clip(RoundedCornerShape(size / 5)),
+            contentScale = ContentScale.Fit
+        )
+    } else {
+        Monogram(source.name, size)
     }
 }
 

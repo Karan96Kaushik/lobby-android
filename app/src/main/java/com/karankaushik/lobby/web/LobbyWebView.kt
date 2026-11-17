@@ -249,6 +249,11 @@ private class LobbyWebClient(
         if (parent is SwipeRefreshLayout) parent.isRefreshing = false
         controller.onPageFinished(url, view.title)
         controller.onHistory(view.canGoBack(), view.canGoForward(), url)
+        if (sameDocument(url, view.url)) {
+            controller.consumeFireTvEntryScript(url)?.let { script ->
+                view.evaluateJavascript(script, null)
+            }
+        }
     }
 
     override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
@@ -263,6 +268,11 @@ private class LobbyWebClient(
         if (!request.isForMainFrame) return
         if (error.errorCode == ERROR_UNKNOWN) return
         controller.onError(messageFor(error.errorCode))
+    }
+
+    private fun sameDocument(finished: String?, current: String?): Boolean {
+        if (finished.isNullOrBlank() || current.isNullOrBlank()) return false
+        return finished.substringBefore('#') == current.substringBefore('#')
     }
 
     private fun messageFor(code: Int): String = when (code) {

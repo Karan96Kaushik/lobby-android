@@ -139,26 +139,26 @@ class SourceLibrary(private val prefs: SharedPreferences) {
                 allowsDownload = false
             ),
             MediaSource(
-                id = "bingebox",
-                name = "BingeBox",
-                home = "https://bingebox.st/",
-                allowedHosts = listOf("bingebox.st"),
+                id = "cinefork",
+                name = "Cinefork",
+                home = "https://cinefork.net/",
+                allowedHosts = listOf("cinefork.net"),
                 isBuiltIn = true,
                 allowsDownload = false
             ),
             MediaSource(
-                id = "meguanime",
-                name = "MeguAnime",
-                home = "https://meguanime.com/",
-                allowedHosts = listOf("meguanime.com"),
+                id = "cinecat",
+                name = "Cinecat",
+                home = "https://cinecat.eu/",
+                allowedHosts = listOf("cinecat.eu"),
                 isBuiltIn = true,
                 allowsDownload = false
             ),
             MediaSource(
-                id = "nxsha",
-                name = "Nxsha",
-                home = "https://web.nxsha.app/",
-                allowedHosts = listOf("nxsha.app"),
+                id = "ghostflix",
+                name = "Ghostflix",
+                home = "https://ghostflix.st/",
+                allowedHosts = listOf("ghostflix.st"),
                 isBuiltIn = true,
                 allowsDownload = false
             )

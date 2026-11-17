@@ -16,6 +16,7 @@ import com.karankaushik.lobby.model.MediaSource
 import com.karankaushik.lobby.model.PlaylistRole
 import com.karankaushik.lobby.policy.SitePolicy
 import com.karankaushik.lobby.remote.RemoteUrl
+import com.karankaushik.lobby.web.SourceBehaviors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -71,6 +72,7 @@ class BrowserController(app: Application) : AndroidViewModel(app) {
 
     private var remoteHosts by mutableStateOf<List<String>>(emptyList())
     private var loaded = false
+    private var fireTvEntrySourceId: String? = null
     private var noticeGeneration = 0
     private var refreshState: (() -> Unit)? = null
 
@@ -308,6 +310,20 @@ class BrowserController(app: Application) : AndroidViewModel(app) {
         hlsCandidate = null
         if (url != null) rememberLocation(url)
         publish()
+    }
+
+    fun armFireTvEntry() {
+        fireTvEntrySourceId = selectedSource.id
+    }
+
+    fun consumeFireTvEntryScript(url: String?): String? {
+        val sourceId = fireTvEntrySourceId ?: return null
+        if (url.isNullOrBlank() || (!url.startsWith("https://") && !url.startsWith("http://"))) return null
+        if (sourceId != selectedSource.id || !SitePolicy.isFirstPartyPage(url, selectedSource.allowedHosts)) {
+            return null
+        }
+        fireTvEntrySourceId = null
+        return SourceBehaviors.fireTvEntryScript(sourceId)
     }
 
     fun onPageFinished(url: String?, title: String?) {
