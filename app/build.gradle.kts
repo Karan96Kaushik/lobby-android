@@ -5,13 +5,13 @@ plugins {
 }
 
 android {
-    namespace = "com.karankaushik.lobby"
-    compileSdk = 35
+    namespace = "com.bayonetbarontech.lobby"
+    compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.karankaushik.lobby"
+        applicationId = "com.bayonetbarontech.lobby"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
     }

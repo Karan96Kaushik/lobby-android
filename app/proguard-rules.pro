@@ -1,3 +1,3 @@
--keepclassmembers class com.karankaushik.lobby.web.LobbyJsBridge {
+-keepclassmembers class com.bayonetbarontech.lobby.web.LobbyJsBridge {
     @android.webkit.JavascriptInterface <methods>;
 }
