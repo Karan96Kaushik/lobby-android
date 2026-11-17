@@ -2,7 +2,7 @@
 
 Lobby is an Android media browser. It opens a chosen site inside a locked-down WebView, plays that site’s own video player, and can save a finished HLS video for offline playback when the user turns downloads on for that site. The same app runs on phones, tablets, and Fire TV.
 
-Package: `com.bayonetbarontech.lobby`. Version 1.0 (`versionCode` 1). Minimum Android 8.0 (API 26). Target and compile SDK 36.
+Package: `com.bayonetbarontech.lobby`. Version 0.9.1 (`versionCode` 1). Minimum Android 8.0 (API 26). Target and compile SDK 36.
 
 ## What the app does
 
