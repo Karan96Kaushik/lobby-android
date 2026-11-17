@@ -143,6 +143,8 @@ fun RemoteScreen(controller: BrowserController, hub: RemoteHub, onClose: () -> U
                 Spacer(Modifier.height(20.dp))
                 if (mode == RemoteMode.SHARE) {
                     SharePane(hub, if (hub.hosting) hostingFocus else shareFocus)
+                } else if (hub.link is RemoteLink.Paired) {
+                    StandbyPane(hub.link as RemoteLink.Paired, hub)
                 } else {
                     FindPane(hub)
                 }
@@ -172,7 +174,7 @@ private fun ModeChip(label: String, selected: Boolean, modifier: Modifier = Modi
 private fun SharePane(hub: RemoteHub, primaryFocus: FocusRequester) {
     if (!hub.hosting) {
         Text(
-            "Show a one-time PIN. The other Lobby enters it and can drive this screen.",
+            "Show a PIN. Other phones enter it to pair. Several can stay paired, and only one controls at a time.",
             color = Color.White.copy(alpha = 0.8f)
         )
         hub.fault?.let { message ->
@@ -206,15 +208,33 @@ private fun SharePane(hub: RemoteHub, primaryFocus: FocusRequester) {
     )
     Spacer(Modifier.height(8.dp))
     Text(
-        if (hub.hostPeer != null) {
-            "Paired with ${hub.hostPeer}. It stays paired until you unpair it."
-        } else {
-            "Enter this PIN on the other Lobby. Five wrong tries replace it."
-        },
+        pairingSummary(hub),
         color = Color.White,
         textAlign = TextAlign.Center,
         modifier = Modifier.fillMaxWidth()
     )
+    if (hub.pairedDevices.isNotEmpty()) {
+        Spacer(Modifier.height(12.dp))
+        hub.pairedDevices.forEach { device ->
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(device.name, color = Color.White, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (device.controlling) "Controlling" else "Paired",
+                        color = if (device.controlling) LobbyAccent else Color.White.copy(alpha = 0.62f),
+                        fontSize = 13.sp
+                    )
+                }
+                if (device.controlling) {
+                    TextButton(onClick = { hub.releaseControl() }) { Text("Release", color = LobbyAccent) }
+                }
+                TextButton(onClick = { hub.unpairDevice(device.id) }) { Text("Remove", color = Color(0xFFFF8A80)) }
+            }
+        }
+    }
     Spacer(Modifier.height(20.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         val newPinInteraction = remember { MutableInteractionSource() }
@@ -315,13 +335,35 @@ private fun FindPane(hub: RemoteHub) {
         )
         Spacer(Modifier.height(12.dp))
         Button(
-            onClick = { hub.connect(peer, pinEntry) },
+            onClick = { hub.connect(peer, pinEntry, fresh = true) },
             enabled = pinEntry.length == 4,
             modifier = Modifier.fillMaxWidth().height(52.dp),
             colors = ButtonDefaults.buttonColors(containerColor = LobbyAccent, contentColor = LobbyBackground)
         ) {
             Text("Pair", fontWeight = FontWeight.Bold)
         }
+    }
+}
+
+@Composable
+private fun StandbyPane(state: RemoteLink.Paired, hub: RemoteHub) {
+    Text("Paired with ${state.name}", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 22.sp)
+    Spacer(Modifier.height(8.dp))
+    Text(
+        if (state.controller != null) "${state.controller} is controlling." else "No one is controlling.",
+        color = Color.White.copy(alpha = 0.8f)
+    )
+    Spacer(Modifier.height(20.dp))
+    Button(
+        onClick = { hub.takeControl() },
+        modifier = Modifier.fillMaxWidth().height(56.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = LobbyAccent, contentColor = LobbyBackground)
+    ) {
+        Text(if (state.controller == null) "Control" else "Take control", fontWeight = FontWeight.Bold)
+    }
+    Spacer(Modifier.height(8.dp))
+    TextButton(onClick = { hub.unpair() }, modifier = Modifier.fillMaxWidth()) {
+        Text("Unpair", color = Color(0xFFFF8A80))
     }
 }
 
@@ -339,11 +381,12 @@ private fun ControlPad(controller: BrowserController, hub: RemoteHub, padFocus: 
         }
         RemoteButton(
             Icons.Filled.PowerSettingsNew,
-            "Disconnect",
+            "Release control",
             size = 52.dp,
             contentColor = Color(0xFFFF8A80)
         ) { hub.disconnect() }
     }
+    TextButton(onClick = { hub.unpair() }) { Text("Unpair", color = Color(0xFFFF8A80)) }
     Spacer(Modifier.height(20.dp))
     Column(
         Modifier
@@ -455,7 +498,7 @@ private fun ControlPad(controller: BrowserController, hub: RemoteHub, padFocus: 
     if (hub.hosting) {
         Spacer(Modifier.height(16.dp))
         Text(
-            if (hub.hostPeer != null) "Paired with ${hub.hostPeer}" else "PIN ${hub.pin}",
+            if (hub.pairedDevices.isEmpty()) "PIN ${hub.pin}" else pairingSummary(hub),
             color = Color.White.copy(alpha = 0.7f),
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Center
@@ -507,6 +550,18 @@ private fun RemoteButton(
         } else {
             Text(description, fontWeight = FontWeight.Bold)
         }
+    }
+}
+
+private fun pairingSummary(hub: RemoteHub): String {
+    val paired = hub.pairedDevices
+    val controlling = paired.firstOrNull { it.controlling }?.name
+    val names = paired.joinToString { it.name }
+    return when {
+        controlling != null && paired.size == 1 -> "$controlling is controlling."
+        controlling != null -> "$controlling is controlling. Paired: $names."
+        paired.isNotEmpty() -> "Paired: $names. None are controlling."
+        else -> "Enter this PIN on another Lobby. Several phones can pair. Only one controls at a time."
     }
 }
 

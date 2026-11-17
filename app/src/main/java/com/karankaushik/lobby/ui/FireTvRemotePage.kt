@@ -41,7 +41,7 @@ fun FireTvRemotePage(hub: RemoteHub, onClose: () -> Unit) {
     var peer by remember { mutableStateOf<DiscoveredPeer?>(null) }
     var digits by remember { mutableStateOf(listOf(0, 0, 0, 0)) }
     val cursor = remember { intArrayOf(0) }
-    val rows = remember(page, hub.hosting, hub.pin, hub.hostPeer, hub.peers, hub.link, hub.fault, peer, digits) {
+    val rows = remember(page, hub.hosting, hub.pin, hub.hostPeer, hub.pairedDevices, hub.peers, hub.link, hub.fault, peer, digits) {
         remoteRows(hub, page, peer, digits,         onPage = {
             cursor[0] = 0
             index = 0
@@ -155,24 +155,37 @@ private fun remoteRows(
     onPeer: (DiscoveredPeer) -> Unit,
     onClose: () -> Unit
 ): List<RemoteRow> = when (page) {
-    RemotePage.MENU -> listOf(
-        RemoteRow("Allow control") {
+    RemotePage.MENU -> buildList {
+        val paired = hub.link as? RemoteLink.Paired
+        if (paired != null) {
+            add(RemoteRow(if (paired.controller == null) "Control ${paired.name}" else "Take control") {
+                hub.takeControl()
+            })
+            add(RemoteRow("Unpair") { hub.unpair() })
+        }
+        add(RemoteRow("Allow control") {
             hub.startHosting()
             onPage(RemotePage.ALLOW)
-        },
-        RemoteRow("Control another Lobby") { onPage(RemotePage.PICK) },
-        RemoteRow("Close") { onClose() }
-    )
-    RemotePage.ALLOW -> listOf(
-        RemoteRow(if (hub.hosting) "New PIN" else "Show PIN") {
+        })
+        add(RemoteRow("Control another Lobby") { onPage(RemotePage.PICK) })
+        add(RemoteRow("Close") { onClose() })
+    }
+    RemotePage.ALLOW -> buildList {
+        hub.pairedDevices.forEach { device ->
+            if (device.controlling) {
+                add(RemoteRow("Release ${device.name}") { hub.releaseControl() })
+            }
+            add(RemoteRow("Remove ${device.name}") { hub.unpairDevice(device.id) })
+        }
+        add(RemoteRow(if (hub.hosting) "New PIN" else "Show PIN") {
             if (hub.hosting) hub.regeneratePin() else hub.startHosting()
-        },
-        RemoteRow("Stop") {
+        })
+        add(RemoteRow("Stop") {
             hub.stopHosting()
             onPage(RemotePage.MENU)
-        },
-        RemoteRow("Back") { onPage(RemotePage.MENU) }
-    )
+        })
+        add(RemoteRow("Back") { onPage(RemotePage.MENU) })
+    }
     RemotePage.PICK -> buildList {
         hub.peers.forEach { found ->
             add(RemoteRow(found.name) { onPeer(found) })
@@ -190,7 +203,7 @@ private fun remoteRows(
         }
         add(RemoteRow("Pair") {
             val chosen = peer ?: return@RemoteRow
-            hub.connect(chosen, digits.joinToString(""))
+            hub.connect(chosen, digits.joinToString(""), fresh = true)
         })
         add(RemoteRow("Back") {
             hub.disconnect()
@@ -198,8 +211,12 @@ private fun remoteRows(
         })
     }
     RemotePage.LINKED -> listOf(
-        RemoteRow("Disconnect") {
+        RemoteRow("Release control") {
             hub.disconnect()
+            onPage(RemotePage.MENU)
+        },
+        RemoteRow("Unpair") {
+            hub.unpair()
             onPage(RemotePage.MENU)
         },
         RemoteRow("Close") { onClose() }
@@ -215,13 +232,18 @@ private fun pageTitle(page: RemotePage): String = when (page) {
 }
 
 private fun pageSubtitle(hub: RemoteHub, page: RemotePage, peer: DiscoveredPeer?): String = when (page) {
-    RemotePage.MENU -> "Press up and down, then select."
-    RemotePage.ALLOW -> if (hub.hostPeer != null) {
-        "${hub.hostPeer} is paired. It stays paired until you unpair it."
-    } else if (hub.hosting) {
-        "Enter this PIN on the other Lobby."
+    RemotePage.MENU -> if (hub.link is RemoteLink.Paired) {
+        val paired = hub.link as RemoteLink.Paired
+        if (paired.controller != null) "Paired with ${paired.name}. ${paired.controller} is controlling."
+        else "Paired with ${paired.name}. No one is controlling."
     } else {
-        "This TV will show a one-time PIN."
+        "Press up and down, then select."
+    }
+    RemotePage.ALLOW -> when {
+        !hub.hosting -> "This TV will show a PIN."
+        hub.hostPeer != null -> "${hub.hostPeer} is controlling. Other phones can pair, but only one controls."
+        hub.pairedDevices.isNotEmpty() -> "Phones are paired. None are controlling."
+        else -> "Enter this PIN on a phone. Several can pair. Only one controls."
     }
     RemotePage.PICK -> if (hub.peers.isEmpty()) {
         "Looking on this Wi-Fi. On the other device, choose Allow control."

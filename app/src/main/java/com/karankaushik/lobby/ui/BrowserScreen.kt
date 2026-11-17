@@ -192,7 +192,7 @@ fun BrowserScreen(controller: BrowserController, downloads: HlsDownloadManager, 
                     onProtection = { sheet = LobbySheet.PROTECTION },
                     onDownloads = { sheet = LobbySheet.DOWNLOADS },
                     onRemote = { showRemote = true },
-                    remoteActive = remote.hosting || remote.link is RemoteLink.Connected,
+                    remoteActive = remote.hosting || remote.link is RemoteLink.Connected || remote.link is RemoteLink.Paired,
                     onSave = {
                         if (Build.VERSION.SDK_INT >= 33 &&
                             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED

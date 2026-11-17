@@ -574,9 +574,9 @@ private fun FireTvSettings(
             )
             Text(
                 when {
-                    remote.hostPeer != null -> "Paired with ${remote.hostPeer}. Unpair to allow a different phone."
-                    remote.fault != null -> remote.fault.orEmpty()
-                    else -> "Enter this PIN in Lobby on your phone."
+                    remote.fault != null && remote.pairedDevices.isEmpty() -> remote.fault.orEmpty()
+                    remote.pairedDevices.isEmpty() -> "Enter this PIN in Lobby on your phone. Several phones can pair. Only one controls."
+                    else -> "Only one paired phone controls at a time."
                 },
                 color = if (remote.fault != null && remote.hostPeer == null) Color(0xFFFF8A80) else Color.White,
                 fontSize = 18.sp
@@ -635,10 +635,18 @@ private fun stepSource(controller: BrowserController, delta: Int) {
     controller.chooseSource(sources[(current + delta).mod(sources.size)])
 }
 
-private fun remoteStatus(remote: RemoteHub): String = when {
-    remote.hostPeer != null -> "${remote.hostPeer} is paired with this TV."
-    remote.link is com.karankaushik.lobby.remote.RemoteLink.Connected -> "This TV is controlling another Lobby."
-    else -> "The PIN above is ready for a phone on the same Wi-Fi."
+private fun remoteStatus(remote: RemoteHub): String {
+    val paired = remote.pairedDevices
+    val controlling = paired.firstOrNull { it.controlling }?.name
+    val names = paired.joinToString { it.name }
+    return when {
+        controlling != null && paired.size == 1 -> "$controlling is controlling this TV."
+        controlling != null -> "$controlling is controlling. Paired: $names."
+        paired.isNotEmpty() -> "Paired: $names. None are controlling."
+        remote.link is com.karankaushik.lobby.remote.RemoteLink.Connected -> "This TV is controlling another Lobby."
+        remote.link is com.karankaushik.lobby.remote.RemoteLink.Paired -> "This TV is paired with another Lobby."
+        else -> "The PIN above is ready for a phone on the same Wi-Fi."
+    }
 }
 
 @Composable
