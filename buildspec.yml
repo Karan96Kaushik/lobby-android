@@ -1,0 +1,106 @@
+version: 0.2
+
+env:
+  variables:
+    ANDROID_COMPILE_SDK: "36"
+    ANDROID_BUILD_TOOLS: "36.0.0"
+    ANDROID_SDK_TOOLS: "11076708"
+    # Optional release signing, supplied by the CodeBuild project (not committed):
+    # ANDROID_KEYSTORE_BASE64
+    # ANDROID_KEYSTORE_PASSWORD
+    # ANDROID_KEY_ALIAS
+    # ANDROID_KEY_PASSWORD
+  exported-variables:
+    - ANDROID_HOME
+
+phases:
+  install:
+    runtime-versions:
+      java: corretto17
+    commands:
+      - echo "Installing Android SDK command-line tools"
+      - export ANDROID_HOME="$HOME/android-sdk"
+      - mkdir -p "$ANDROID_HOME/cmdline-tools"
+      - |
+        curl -fsSL -o /tmp/cmdline-tools.zip \
+          "https://dl.google.com/android/repository/commandlinetools-linux-${ANDROID_SDK_TOOLS}_latest.zip"
+      - unzip -q /tmp/cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools"
+      - mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+      - export PATH="$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools"
+      - yes | sdkmanager --licenses >/dev/null || true
+      - sdkmanager "platform-tools" "platforms;android-${ANDROID_COMPILE_SDK}" "build-tools;${ANDROID_BUILD_TOOLS}"
+
+  pre_build:
+    commands:
+      - export ANDROID_HOME="$HOME/android-sdk"
+      - export PATH="$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools"
+      - echo "sdk.dir=$ANDROID_HOME" > local.properties
+      - chmod +x ./gradlew
+      - |
+        if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+          echo "Decoding release keystore"
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > /tmp/release.keystore
+          export ANDROID_KEYSTORE_PATH=/tmp/release.keystore
+        else
+          echo "No release keystore provided; release APK and AAB will be unsigned"
+        fi
+
+  build:
+    commands:
+      - |
+        export ANDROID_HOME="$HOME/android-sdk"
+        export PATH="$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools"
+        if [ -f /tmp/release.keystore ]; then
+          export ANDROID_KEYSTORE_PATH=/tmp/release.keystore
+        fi
+        echo "Running unit tests"
+        ./gradlew --no-daemon test
+        echo "Building debug APK"
+        ./gradlew --no-daemon assembleDebug
+        echo "Building release APK"
+        ./gradlew --no-daemon assembleRelease
+        echo "Building release AAB"
+        ./gradlew --no-daemon bundleRelease
+
+  post_build:
+    commands:
+      - |
+        if [ -f /tmp/release.keystore ]; then
+          echo "Removing temporary keystore"
+          rm -f /tmp/release.keystore
+        fi
+      - |
+        if [ "$CODEBUILD_BUILD_SUCCEEDING" != "1" ]; then
+          echo "Build failed; skipping artifact copy"
+          exit 0
+        fi
+        VERSION_NAME=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
+        VERSION_CODE=$(sed -n 's/.*versionCode = \([0-9][0-9]*\).*/\1/p' app/build.gradle.kts | head -1)
+        SAFE_NAME=$(echo "$VERSION_NAME" | sed 's/[^A-Za-z0-9._-]/-/g')
+        BASE="lobby-${SAFE_NAME}-v${VERSION_CODE}"
+        mkdir -p dist
+        DEBUG_APK=$(find app/build/outputs/apk/debug -name '*.apk' 2>/dev/null | head -1)
+        RELEASE_APK=$(find app/build/outputs/apk/release -name '*.apk' 2>/dev/null | head -1)
+        RELEASE_AAB=$(find app/build/outputs/bundle/release -name '*.aab' 2>/dev/null | head -1)
+        if [ -n "$DEBUG_APK" ]; then
+          cp "$DEBUG_APK" "dist/${BASE}-debug.apk"
+        fi
+        if [ -n "$RELEASE_APK" ]; then
+          cp "$RELEASE_APK" "dist/${BASE}-release.apk"
+        fi
+        if [ -n "$RELEASE_AAB" ]; then
+          cp "$RELEASE_AAB" "dist/${BASE}-release.aab"
+        fi
+        echo "Build artifacts:"
+        find dist -type f \( -name "*.apk" -o -name "*.aab" \) -print
+
+artifacts:
+  files:
+    - dist/*
+  discard-paths: yes
+
+cache:
+  paths:
+    - /root/.gradle/caches/**/*
+    - /root/.gradle/wrapper/**/*
+    - /root/android-sdk/**/*
